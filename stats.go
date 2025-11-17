@@ -1,9 +1,6 @@
 package xpulsar
 
-import "go.k6.io/k6/js/modules/k6/stats"
-
-var (
-	PublishMessages = stats.New("pulsar.publish.message.count", stats.Counter)
-	PublishBytes    = stats.New("pulsar.publish.message.bytes", stats.Counter, stats.Data)
-	PublishErrors   = stats.New("pulsar.publish.error.count", stats.Counter)
-)
+// This file is intentionally left empty.
+// The metric definitions were moved to pubsub.go to support the new
+// go.k6.io/k6/metrics API, which requires registration in the module's
+// instance initialization.

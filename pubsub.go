@@ -10,9 +10,9 @@ import (
 	plog "github.com/apache/pulsar-client-go/pulsar/log"
 	"github.com/sirupsen/logrus"
 
+	"go.k6.io/k6/js/common"
 	"go.k6.io/k6/js/modules"
-	"go.k6.io/k6/js/modules/k6/stats"
-	"go.k6.io/k6/lib"
+	"go.k6.io/k6/metrics"
 )
 
 var (
@@ -28,11 +28,22 @@ type PublisherStats struct {
 	Bytes        int64
 }
 
-type PubSub struct{}
+type PulsarMetrics struct {
+	PublishMessages *metrics.Counter
+	PublishBytes    *metrics.Counter
+	PublishErrors   *metrics.Counter
+}
+
+type PubSub struct {
+	vu      modules.VU
+	metrics PulsarMetrics
+}
 
 func init() {
-	modules.Register("k6/x/pulsar", new(PubSub))
+	modules.Register("k6/x/pulsar", New)
 }
+
+func New() *PubSub { return &PubSub{} }
 
 type PulsarClientConfig struct {
 	URL               string
@@ -45,6 +56,51 @@ type ProducerConfig struct {
 	BatchingMaxMessages uint
 	MaxPendingMessages  int
 	SendTimeout         time.Duration
+}
+
+func (p *PubSub) XModuleInstance(vu modules.VU) modules.Instance {
+	registry := vu.InitEnv().Registry
+	m, err := registerMetrics(registry)
+	if err != nil {
+		common.Throw(vu.Runtime(), err)
+	}
+
+	return &PubSub{
+		vu:      vu,
+		metrics: m,
+	}
+}
+
+func (p *PubSub) Exports() modules.Exports {
+	return modules.Exports{
+		Named: map[string]interface{}{
+			"createClient":   p.CreateClient,
+			"createProducer": p.CreateProducer,
+			"publish":        p.Publish,
+			"closeClient":    p.CloseClient,
+			"closeProducer":  p.CloseProducer,
+		},
+	}
+}
+
+func registerMetrics(registry *metrics.Registry) (PulsarMetrics, error) {
+	var err error
+	m := PulsarMetrics{}
+
+	m.PublishMessages, err = registry.NewMetric("pulsar.publish.message.count", metrics.Counter)
+	if err != nil {
+		return m, err
+	}
+	m.PublishBytes, err = registry.NewMetric("pulsar.publish.message.bytes", metrics.Counter, metrics.Data)
+	if err != nil {
+		return m, err
+	}
+	m.PublishErrors, err = registry.NewMetric("pulsar.publish.error.count", metrics.Counter)
+	if err != nil {
+		return m, err
+	}
+
+	return m, nil
 }
 
 func (p *PubSub) CreateClient(clientConfig PulsarClientConfig) (pulsar.Client, error) {
@@ -115,7 +171,7 @@ func (p *PubSub) Publish(
 	properties map[string]string,
 	async bool,
 ) error {
-	state := lib.GetState(ctx)
+	state := p.vu.State()
 	if state == nil {
 		return errNilState
 	}
@@ -143,7 +199,7 @@ func (p *PubSub) Publish(
 				if e != nil {
 					currentStats.Errors++
 				}
-				if errStats := ReportPubishMetrics(ctx, currentStats); errStats != nil {
+				if errStats := p.ReportPubishMetrics(ctx, currentStats); errStats != nil {
 					log.Printf("could not report async publish metrics: %v", errStats)
 				}
 			},
@@ -157,44 +213,28 @@ func (p *PubSub) Publish(
 		currentStats.Errors++
 	}
 
-	if errStats := ReportPubishMetrics(ctx, currentStats); errStats != nil {
+	if errStats := p.ReportPubishMetrics(ctx, currentStats); errStats != nil {
 		// Log the error instead of fatally stopping the test
 		log.Printf("could not report sync publish metrics: %v", errStats)
 	}
 	return err
 }
 
-func ReportPubishMetrics(ctx context.Context, currentStats PublisherStats) error {
-	state := lib.GetState(ctx)
+func (p *PubSub) ReportPubishMetrics(ctx context.Context, currentStats PublisherStats) error {
+	state := p.vu.State()
 	if state == nil {
 		return errNilStateOfStats
 	}
 
-	tags := make(map[string]string)
-	tags["producer_name"] = currentStats.ProducerName
-	tags["topic"] = currentStats.Topic
+	tags := metrics.NewTags(
+		"producer_name", currentStats.ProducerName,
+		"topic", currentStats.Topic,
+	)
 
-	now := time.Now()
+	p.metrics.PublishMessages.WithTags(tags).Add(float64(currentStats.Messages))
+	p.metrics.PublishErrors.WithTags(tags).Add(float64(currentStats.Errors))
+	p.metrics.PublishBytes.WithTags(tags).Add(float64(currentStats.Bytes))
 
-	stats.PushIfNotDone(ctx, state.Samples, stats.Sample{
-		Time:   now,
-		Metric: PublishMessages,
-		Tags:   stats.IntoSampleTags(&tags),
-		Value:  float64(currentStats.Messages),
-	})
-
-	stats.PushIfNotDone(ctx, state.Samples, stats.Sample{
-		Time:   now,
-		Metric: PublishErrors,
-		Tags:   stats.IntoSampleTags(&tags),
-		Value:  float64(currentStats.Errors),
-	})
-
-	stats.PushIfNotDone(ctx, state.Samples, stats.Sample{
-		Time:   now,
-		Metric: PublishBytes,
-		Tags:   stats.IntoSampleTags(&tags),
-		Value:  float64(currentStats.Bytes),
-	})
+	metrics.PushIfNotDone(ctx, state.Samples)
 	return nil
 }

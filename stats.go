@@ -1,6 +1,6 @@
 package xpulsar
 
-import "go.k6.io/k6/stats"
+import "go.k6.io/k6/js/modules/k6/stats"
 
 var (
 	PublishMessages = stats.New("pulsar.publish.message.count", stats.Counter)

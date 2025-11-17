@@ -1,4 +1,4 @@
-module github.com/koolay/xk6-pulsar
+module github.com/eduobs/xk6-pulsar
 
 go 1.17
 

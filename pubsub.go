@@ -3,7 +3,6 @@ package xpulsar
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log"
 	"time"
 
@@ -36,23 +35,34 @@ func init() {
 }
 
 type PulsarClientConfig struct {
-	URL string
+	URL               string
+	ConnectionTimeout time.Duration
 }
 
 type ProducerConfig struct {
-	Topic string
+	Topic               string
+	CompressionType     pulsar.CompressionType
+	BatchingMaxMessages uint
+	MaxPendingMessages  int
+	SendTimeout         time.Duration
 }
 
 func (p *PubSub) CreateClient(clientConfig PulsarClientConfig) (pulsar.Client, error) {
 	logger := logrus.StandardLogger()
 	logger.SetLevel(logrus.ErrorLevel)
+
+	connectionTimeout := 3 * time.Second
+	if clientConfig.ConnectionTimeout > 0 {
+		connectionTimeout = clientConfig.ConnectionTimeout
+	}
+
 	client, err := pulsar.NewClient(pulsar.ClientOptions{
 		URL:               clientConfig.URL,
-		ConnectionTimeout: 3 * time.Second,
+		ConnectionTimeout: connectionTimeout,
 		Logger:            plog.NewLoggerWithLogrus(logger),
 	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to create pulsar client, url: %s, error: %+v", clientConfig.URL, err)
+		return nil, err
 	}
 	return client, nil
 }
@@ -65,22 +75,37 @@ func (p *PubSub) CloseProducer(producer pulsar.Producer) {
 	producer.Close()
 }
 
-func (p *PubSub) CreateProducer(client pulsar.Client, config ProducerConfig) pulsar.Producer {
+func (p *PubSub) CreateProducer(client pulsar.Client, config ProducerConfig) (pulsar.Producer, error) {
+	batchingMaxMessages := uint(100)
+	if config.BatchingMaxMessages > 0 {
+		batchingMaxMessages = config.BatchingMaxMessages
+	}
+
+	maxPendingMessages := 100
+	if config.MaxPendingMessages > 0 {
+		maxPendingMessages = config.MaxPendingMessages
+	}
+
+	sendTimeout := time.Second
+	if config.SendTimeout > 0 {
+		sendTimeout = config.SendTimeout
+	}
+
 	option := pulsar.ProducerOptions{
 		Topic:               config.Topic,
 		Schema:              pulsar.NewStringSchema(nil),
-		CompressionType:     pulsar.LZ4,
+		CompressionType:     config.CompressionType,
 		CompressionLevel:    pulsar.Faster,
-		BatchingMaxMessages: 100,
-		MaxPendingMessages:  100,
-		SendTimeout:         time.Second,
+		BatchingMaxMessages: batchingMaxMessages,
+		MaxPendingMessages:  maxPendingMessages,
+		SendTimeout:         sendTimeout,
 	}
 
 	producer, err := client.CreateProducer(option)
 	if err != nil {
-		log.Fatalf("failed to create producer, error: %+v", err)
+		return nil, err
 	}
-	return producer
+	return producer, nil
 }
 
 func (p *PubSub) Publish(
@@ -95,7 +120,6 @@ func (p *PubSub) Publish(
 		return errNilState
 	}
 
-	var err error
 	currentStats := PublisherStats{
 		Topic:        producer.Topic(),
 		ProducerName: producer.Name(),
@@ -115,25 +139,28 @@ func (p *PubSub) Publish(
 			ctx,
 			msg,
 			func(mi pulsar.MessageID, pm *pulsar.ProducerMessage, e error) {
+				currentStats.Messages = 1
 				if e != nil {
-					err = e
 					currentStats.Errors++
+				}
+				if errStats := ReportPubishMetrics(ctx, currentStats); errStats != nil {
+					log.Printf("could not report async publish metrics: %v", errStats)
 				}
 			},
 		)
 
-		return err
+		return nil
 	}
 
-	_, err = producer.Send(ctx, msg)
+	_, err := producer.Send(ctx, msg)
 	if err != nil {
 		currentStats.Errors++
 	}
 
 	if errStats := ReportPubishMetrics(ctx, currentStats); errStats != nil {
-		log.Fatal(errStats)
+		// Log the error instead of fatally stopping the test
+		log.Printf("could not report sync publish metrics: %v", errStats)
 	}
-
 	return err
 }
 

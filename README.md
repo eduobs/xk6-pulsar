@@ -1,5 +1,11 @@
 # Test pulsar using k6
 
+## Origem do Projeto
+
+Este projeto é um fork de [koolay/xk6-pulsar](https://github.com/koolay/xk6-pulsar). A base original forneceu a funcionalidade essencial para publicar mensagens no Apache Pulsar a partir de testes k6.
+
+---
+
 ## Build k6 with extension 
 
 ```bash
@@ -8,7 +14,7 @@
 ❯ go install go.k6.io/xk6/cmd/xk6@latest
 
 # build k6
-❯ xk6 build --with github.com/koolay/xk6-pulsar=.
+❯ xk6 build --with github.com/eduobs/xk6-pulsar=.
 
 ```
 
@@ -54,3 +60,14 @@ default ✓ [======================================] 2 VUs  10s
      vus_max........................: 2       min=2        max=2
 ```
 
+---
+
+## Melhorias Realizadas
+
+As seguintes alterações e melhorias foram implementadas nesta versão para aumentar a robustez e a flexibilidade dos testes:
+
+1.  **Tratamento de Erros Aprimorado**: O tratamento de erros foi modificado para ser menos agressivo. Em vez de usar `log.Fatalf`, que encerrava todo o teste em caso de falha, as funções agora retornam erros. Isso permite que os scripts de teste k6 capturem e tratem falhas individuais (por exemplo, em um único VU) sem interromper a execução completa do teste de carga.
+
+2.  **Correção na Publicação Assíncrona**: Foi corrigido um bug na função de publicação assíncrona (`Publish` com `async: true`). Agora, as métricas (mensagens, bytes e erros) são corretamente reportadas e os erros de publicação são devidamente tratados dentro do callback assíncrono.
+
+3.  **Configuração Flexível**: As configurações do cliente e do produtor Pulsar, que antes eram fixas no código (hardcoded), foram expostas. Agora é possível configurar opções como `ConnectionTimeout`, `CompressionType`, `BatchingMaxMessages`, entre outras, diretamente do script de teste em JavaScript, permitindo cenários de teste muito mais realistas e variados.
